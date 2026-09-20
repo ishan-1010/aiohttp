@@ -1,0 +1,1 @@
+Fixed ``BodyPartReader.read_chunk()`` raising ``AssertionError`` for a body part with an explicit ``Content-Length: 0`` header when asked for a chunk smaller than the boundary length -- by :user:`ishan-1010`.

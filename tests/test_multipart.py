@@ -302,6 +302,51 @@ class TestPartReader:
             with pytest.raises(ValueError, match="Content-Length"):
                 aiohttp.BodyPartReader(BOUNDARY, h, stream)
 
+    async def test_read_chunk_zero_content_length_small_size(self) -> None:
+        # An explicit `Content-Length: 0` is legal outside multipart/form-data
+        # (e.g. multipart/mixed or multipart/related, where the empty-part
+        # special case that nulls out `_length` does not apply). `read_chunk`
+        # used to test `self._length` for truthiness, so a declared length of
+        # 0 was treated the same as "no Content-Length" and fell through to
+        # the boundary-scanning stream reader, which asserts the requested
+        # size is at least the boundary length. Any caller asking for a
+        # smaller chunk -- a perfectly normal thing to do against a reader
+        # that does not know in advance a part is empty -- hit that assert
+        # instead of getting back an immediate empty chunk.
+        h = HeadersDictProxy(CIMultiDict({"CONTENT-LENGTH": "0"}))
+        with Stream(b"\r\n--:--") as stream:
+            obj = aiohttp.BodyPartReader(BOUNDARY, h, stream)
+            chunk = await obj.read_chunk(1)
+        assert chunk == b""
+        assert obj.at_eof()
+
+    async def test_read_zero_content_length_part_among_others(self) -> None:
+        # End-to-end sanity check for the same `Content-Length: 0` part, in
+        # context between the previous and next parts of a real reader.
+        with Stream(
+            b"--:\r\n"
+            b"Content-Length: 0\r\n"
+            b"\r\n"
+            b"\r\n"
+            b"--:\r\n"
+            b"\r\n"
+            b"second\r\n"
+            b"--:--"
+        ) as stream:
+            reader = aiohttp.MultipartReader(
+                {CONTENT_TYPE: 'multipart/related;boundary=":"'},
+                stream,
+            )
+            first = await reader.next()
+            assert isinstance(first, BodyPartReader)
+            assert first._length == 0
+            assert await first.read() == b""
+            assert first.at_eof()
+
+            second = await reader.next()
+            assert isinstance(second, BodyPartReader)
+            assert await second.read() == b"second"
+
     async def test_read_chunk_properly_counts_read_bytes(self) -> None:
         expected = b"." * 10
         size = len(expected)
